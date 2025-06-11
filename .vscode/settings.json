@@ -1,0 +1,14 @@
+{
+  // 1) Gunakan Tailwind untuk mem-parse file CSS
+  "files.associations": {
+    "*.css": "tailwindcss"
+  },
+  // 2) Matikan validasi CSS default agar tidak nge-flag @tailwind/@apply
+  "css.validate": false,
+  // 3) Aktifkan validasi Tailwind dan include file CSS
+  "tailwindCSS.includeLanguages": {
+    "tailwindcss": "css",
+    "plaintext": "css"
+  },
+  "tailwindCSS.validate": true
+}
