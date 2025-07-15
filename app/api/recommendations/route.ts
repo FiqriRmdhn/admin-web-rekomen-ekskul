@@ -197,7 +197,7 @@ async function getRekomendasiEkskul(
     const kategoriEkskul = eks.kategori || []
     let kategoriBoost = 0
     kategoriEkskul.forEach((k: string) => {
-      kategoriBoost += (kategoriMinat[k] || 0) * 0.2
+      kategoriBoost += (kategoriMinat[k] || 0) * 0.3
     })
 
     // Boost jika user sendiri pernah memberi rating pada ekskul tsb
@@ -205,7 +205,7 @@ async function getRekomendasiEkskul(
     let selfBoost = 0
     if (myRating) {
       const ratingValue = myRating.rating as number
-      selfBoost += ratingValue * 0.4
+      selfBoost += ratingValue * 0.3
     }
 
     // Skor akhir ekskul
