@@ -28,15 +28,15 @@ function RecommendationSkeleton() {
   return (
     <Card className="relative">
       <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-start justify-between gap-3">
           <div className="flex items-center space-x-3 min-w-0 flex-1">
             <Skeleton className="h-12 w-12 rounded-full flex-shrink-0" />
             <div className="min-w-0 flex-1">
-              <Skeleton className="h-5 w-32 mb-1" />
+              <Skeleton className="h-5 w-full mb-1" />
               <Skeleton className="h-4 w-20" />
             </div>
           </div>
-          <Skeleton className="h-6 w-12 flex-shrink-0 ml-2" />
+          <Skeleton className="h-6 w-12 flex-shrink-0" />
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -183,7 +183,7 @@ export default function RecommendationsPage() {
           {recommendations.map((userRec) => (
             <Card key={userRec.user_id} className="relative">
               <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
+                <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center space-x-3 min-w-0 flex-1">
                     <Avatar className="h-12 w-12 flex-shrink-0">
                       <AvatarImage src={userRec.foto_url || undefined} />
@@ -195,11 +195,11 @@ export default function RecommendationsPage() {
                       </AvatarFallback>
                     </Avatar>
                     <div className="min-w-0 flex-1">
-                      <CardTitle className="text-lg truncate">{userRec.nama_lengkap}</CardTitle>
+                      <CardTitle className="text-lg leading-tight break-words">{userRec.nama_lengkap}</CardTitle>
                       <CardDescription className="truncate">@{userRec.username}</CardDescription>
                     </div>
                   </div>
-                  <Badge variant="outline" className="text-xs flex-shrink-0 ml-2">
+                  <Badge variant="outline" className="text-xs flex-shrink-0 whitespace-nowrap">
                     Top 3
                   </Badge>
                 </div>
@@ -211,30 +211,32 @@ export default function RecommendationsPage() {
                   userRec.recommendations.map((rec) => (
                     <div
                       key={`${userRec.user_id}-${rec.rank}`}
-                      className="flex items-center space-x-3 p-3 rounded-lg border bg-gray-50/50"
+                      className="flex items-start space-x-3 p-3 rounded-lg border bg-gray-50/50"
                     >
-                      <div className="flex items-center space-x-2 flex-shrink-0">
+                      <div className="flex items-center space-x-2 flex-shrink-0 pt-0.5">
                         <Badge
                           className={`w-6 h-6 rounded-full p-0 flex items-center justify-center text-xs ${getRankBadgeColor(rec.rank)}`}
                         >
                           {rec.rank}
                         </Badge>
-                        {rec.is_best && <Badge className="bg-blue-500 text-white text-xs px-2 py-1">Best</Badge>}
+                        {rec.is_best && (
+                          <Badge className="bg-blue-500 text-white text-xs px-2 py-1 whitespace-nowrap">Best</Badge>
+                        )}
                       </div>
 
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center space-x-1 mb-1">
-                          <h4 className="font-medium text-sm truncate">{rec.ekskul_nama}</h4>
+                        <div className="mb-1">
+                          <h4 className="font-medium text-sm leading-tight break-words">{rec.ekskul_nama}</h4>
                         </div>
 
-                        <div className="flex items-center space-x-3 text-xs text-muted-foreground">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                           <div className="flex items-center space-x-1">
-                            <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                            <Star className="h-3 w-3 fill-yellow-400 text-yellow-400 flex-shrink-0" />
                             <span>{rec.raw_score.toFixed(1)}</span>
                           </div>
                           <div className={`flex items-center space-x-1 ${getScoreColor(rec.confidence_score)}`}>
-                            <Trophy className="h-3 w-3" />
-                            <span>{getMatchPercentage(rec.confidence_score)}% match</span>
+                            <Trophy className="h-3 w-3 flex-shrink-0" />
+                            <span className="whitespace-nowrap">{getMatchPercentage(rec.confidence_score)}% match</span>
                           </div>
                         </div>
 
