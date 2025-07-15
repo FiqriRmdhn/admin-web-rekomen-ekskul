@@ -1,23 +1,22 @@
 import { NextResponse } from "next/server"
 import { supabase } from "@/lib/supabase"
 
-// Cache untuk data yang jarang berubah (hanya ekstrakurikuler)
+// Cache untuk data ekstrakurikuler agar tidak fetch berulang
 let ekskulsCache: any[] | null = null
 let cacheTimestamp = 0
 const CACHE_DURATION = 5 * 60 * 1000 // 5 menit
 
-// Cosine similarity untuk dua vektor rating
+// Hitung cosine similarity antara dua vektor rating
 function cosineSimilarity(a: Record<string, number>, b: Record<string, number>): number {
   const keys = Object.keys(a).filter((k) => k in b)
   if (keys.length === 0) return 0
 
   let dot = 0, normA = 0, normB = 0
   keys.forEach((k) => {
-    dot += a[k] * b[k]
+    dot   += a[k] * b[k]
     normA += a[k] * a[k]
     normB += b[k] * b[k]
   })
-
   return dot / (Math.sqrt(normA) * Math.sqrt(normB))
 }
 
@@ -29,28 +28,28 @@ async function getCachedEkskuls() {
   }
   const { data, error } = await supabase
     .from("ekstrakurikuler")
-    .select("*")
-  ekskulsCache = data || []
+    .select("id, nama, kategori")
+  ekskulsCache   = data || []
   cacheTimestamp = now
   return ekskulsCache
 }
 
-// Collaborative Filtering: user- & item-based
+// CF only: user‑based + item‑based
 async function getRekomendasiEkskul(
   userId: string,
   allRatings: any[],
   ekskuls: any[]
 ) {
-  // 1) Rating milik user target
+  // 1) Ambil rating milik user target
   const userRatings = allRatings.filter(r => r.user_id === userId)
   if (userRatings.length === 0) return []
 
-  // 2) Bangun profil: { userId: { ekskulId: rating, ... }, ... }
+  // 2) Bangun profil semua user: { uid: { ekskulId: rating, … } }
   const profiles: Record<string, Record<string, number>> = {}
   allRatings.forEach(r => {
-    const uid = r.user_id as string
+    const uid = r.user_id  as string
     const eid = r.ekskul_id as string
-    const rt  = r.rating as number
+    const rt  = r.rating    as number
     if (!profiles[uid]) profiles[uid] = {}
     profiles[uid][eid] = rt
   })
@@ -58,7 +57,7 @@ async function getRekomendasiEkskul(
   const myProfile = profiles[userId]
   const ratedSet  = new Set(Object.keys(myProfile))
 
-  // 3) User-based CF
+  // 3) User‑based CF
   const userBased: Record<string, number> = {}
   for (const [otherId, prof] of Object.entries(profiles)) {
     if (otherId === userId) continue
@@ -70,12 +69,12 @@ async function getRekomendasiEkskul(
     }
   }
 
-  // 4) Item-based CF
+  // 4) Item‑based CF
   const itemUser: Record<string, Record<string, number>> = {}
   allRatings.forEach(r => {
     const eid = r.ekskul_id as string
-    const uid = r.user_id  as string
-    const rt  = r.rating   as number
+    const uid = r.user_id   as string
+    const rt  = r.rating    as number
     if (!itemUser[eid]) itemUser[eid] = {}
     itemUser[eid][uid] = rt
   })
@@ -90,12 +89,12 @@ async function getRekomendasiEkskul(
     }
   }
 
-  // 5) Gabungkan skor dan urutkan
+  // 5) Gabungkan skor CF dan urutkan
   const finalScores: Record<string, number> = {}
   ekskuls.forEach(eks => {
-    const eid = eks.id as string
-    const u   = userBased[eid]  || 0
-    const i   = itemBased[eid]  || 0
+    const eid   = eks.id as string
+    const u     = userBased[eid] || 0
+    const i     = itemBased[eid] || 0
     const total = u * 0.5 + i * 0.5
     if (total > 0) finalScores[eid] = total
   })
@@ -104,7 +103,7 @@ async function getRekomendasiEkskul(
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10)
 
-  // 6) Return dengan struktur yang sama
+  // 6) Kembalikan dengan struktur objek ekskul + skor
   return sorted
     .map(([eid, skor]) => {
       const eks = ekskuls.find(x => x.id === eid)
@@ -117,7 +116,7 @@ async function getRekomendasiEkskul(
 // API handler
 export async function GET() {
   try {
-    // 1) Fetch users & ratings & ekstrakurikuler
+    // 1) Fetch users, ratings, dan ekstrakurikuler
     const [uRes, rRes, ekskuls] = await Promise.all([
       supabase
         .from("users")
@@ -131,11 +130,11 @@ export async function GET() {
       return NextResponse.json({ error: "Fetch error" }, { status: 500 })
     }
 
-    const users = uRes.data || []
-    const allRatings = rRes.data || []
+    const users      = uRes.data     || []
+    const allRatings = rRes.data     || []
     const recommendations: any[] = []
 
-    // 2) Proses per batch
+    // 2) Proses per batch 5 user
     const batchSize = 5
     for (let i = 0; i < users.length; i += batchSize) {
       const batch = users.slice(i, i + batchSize)
@@ -146,7 +145,7 @@ export async function GET() {
           ekskul_nama: rec.nama,
           confidence_score: Math.min(rec.skor / 10, 1),
           raw_score: rec.skor,
-          matching_categories: [],      // dikosongkan
+          matching_categories: rec.kategori || [],  // tetap gunakan kategori dari DB
           is_best: idx === 0,
         }))
         return {
