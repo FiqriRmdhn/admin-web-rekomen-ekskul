@@ -7,23 +7,29 @@ let ekskulsCache: any[] | null = null
 let cacheTimestamp = 0
 const CACHE_DURATION = 5 * 60 * 1000 // 5 menit
 
-// Cosine similarity untuk dua vektor nilai
-function cosineSimilarity(a: Record<string, number>, b: Record<string, number>): number {
-  const aKeys = Object.keys(a)
-  const bKeys = Object.keys(b)
-  const commonKeys = aKeys.filter((key) => key in b)
-  if (commonKeys.length === 0) return 0
-  let dot = 0, normA = 0, normB = 0
-  for (const key of commonKeys) {
-    dot += a[key] * b[key]
+/**
+ * Hitung Pearson correlation antara dua vektor nilai.
+ */
+function pearsonSimilarity(a: Record<string, number>, b: Record<string, number>): number {
+  const keys = Object.keys(a).filter(k => k in b)
+  const n = keys.length
+  if (n === 0) return 0
+
+  // Hitung rata-rata
+  const meanA = keys.reduce((sum, k) => sum + a[k], 0) / n
+  const meanB = keys.reduce((sum, k) => sum + b[k], 0) / n
+
+  // Hitung numerator & denominators
+  let num = 0, denA = 0, denB = 0
+  for (const k of keys) {
+    const da = a[k] - meanA
+    const db = b[k] - meanB
+    num += da * db
+    denA += da * da
+    denB += db * db
   }
-  for (const key of aKeys) {
-    normA += a[key] * a[key]
-  }
-  for (const key of bKeys) {
-    normB += b[key] * b[key]
-  }
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB))
+  const denom = Math.sqrt(denA * denB)
+  return denom === 0 ? 0 : num / denom
 }
 
 // Fungsi untuk mendapatkan data dengan cache
@@ -42,7 +48,7 @@ async function getCachedData() {
   return { questions: questionsCache, ekskuls: ekskulsCache }
 }
 
-// Hybrid CF dengan boost untuk jawaban user sendiri
+// Hybrid CF dengan boost untuk jawaban user sendiri, menggunakan Pearson
 async function getRekomendasiEkskul(
   userId: string,
   allRatings: any[],
@@ -80,10 +86,10 @@ async function getRekomendasiEkskul(
   const userRatings = allRatings.filter(r => r.user_id === userId)
   const userRatedEkskuls = new Set(userRatings.map(r => r.ekskul_id as string))
 
-  // 4. User-Based CF
+  // 4. User-Based CF (Pearson)
   for (const [otherId, prof] of Object.entries(profiles)) {
     if (otherId === userId) continue
-    const sim = cosineSimilarity(myProfile, prof)
+    const sim = pearsonSimilarity(myProfile, prof)
     if (sim <= simThreshold) continue
     allRatings
       .filter(r => r.user_id === otherId && !userRatedEkskuls.has(r.ekskul_id as string))
@@ -93,7 +99,7 @@ async function getRekomendasiEkskul(
       })
   }
 
-  // 5. Item-Based CF
+  // 5. Item-Based CF (Pearson)
   const itemUserMap: Record<string, Record<string, number>> = {}
   allRatings.forEach(r => {
     const eid = r.ekskul_id as string
@@ -104,12 +110,12 @@ async function getRekomendasiEkskul(
   userRatings.forEach(r => {
     const baseEid = r.ekskul_id as string
     const myRating = r.rating
-    Object.entries(itemUserMap).forEach(([otherEid, uMap]) => {
-      if (otherEid === baseEid || userRatedEkskuls.has(otherEid)) return
-      const sim = cosineSimilarity(itemUserMap[baseEid], uMap)
-      if (sim <= simThreshold) return
+    for (const [otherEid, uMap] of Object.entries(itemUserMap)) {
+      if (otherEid === baseEid || userRatedEkskuls.has(otherEid)) continue
+      const sim = pearsonSimilarity(itemUserMap[baseEid], uMap)
+      if (sim <= simThreshold) continue
       itemBasedScores[otherEid] = (itemBasedScores[otherEid] || 0) + sim * myRating
-    })
+    }
   })
 
   // 6. Hitung final skor dengan boost:
