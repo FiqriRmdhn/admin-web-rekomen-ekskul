@@ -26,23 +26,23 @@ function cosineSimilarity(a: Record<string, number>, b: Record<string, number>):
   return dot / (Math.sqrt(normA) * Math.sqrt(normB))
 }
 
-// Fungsi untuk mendapatkan data dengan cache
+// Ambil questions & ekskuls dengan cache
 async function getCachedData() {
   const now = Date.now()
   if (questionsCache && ekskulsCache && now - cacheTimestamp < CACHE_DURATION) {
     return { questions: questionsCache, ekskuls: ekskulsCache }
   }
-  const [questionsResult, ekskulsResult] = await Promise.all([
+  const [qRes, eRes] = await Promise.all([
     supabase.from("questions").select("id, category"),
     supabase.from("ekstrakurikuler").select("*"),
   ])
-  questionsCache = questionsResult.data || []
-  ekskulsCache = ekskulsResult.data || []
+  questionsCache = qRes.data || []
+  ekskulsCache = eRes.data || []
   cacheTimestamp = now
   return { questions: questionsCache, ekskuls: ekskulsCache }
 }
 
-// Hybrid CF dengan boost untuk jawaban user sendiri
+// Hybrid CF dengan personal-first
 async function getRekomendasiEkskul(
   userId: string,
   allRatings: any[],
@@ -54,7 +54,42 @@ async function getRekomendasiEkskul(
   const qCat: Record<number, string> = {}
   questions.forEach(q => { qCat[q.id] = q.category })
 
-  // 2. Bangun profil per user (rating & respons)
+  // 2. Siapkan struktur
+  const userRatings = allRatings.filter(r => r.user_id === userId)
+  const userRatedEkskuls = new Set(userRatings.map(r => r.ekskul_id as string))
+  const personalScores: Record<string, number> = {}
+
+  // 3. Hitung skor personal untuk tiap ekskul
+  // a) dari rating pribadi (langsung)
+  userRatings.forEach(r => {
+    const eid = r.ekskul_id as string
+    personalScores[eid] = (personalScores[eid] || 0) + (r.rating as number)
+  })
+  // b) dari respons kuis berdasarkan kategori
+  const kategoriScores: Record<string, number> = {}
+  allResponses
+    .filter(r => r.user_id === userId)
+    .forEach(r => {
+      const cat = qCat[r.question_id] || "unknown"
+      kategoriScores[cat] = (kategoriScores[cat] || 0) + (r.score as number)
+    })
+  ekskuls.forEach(eks => {
+    const eid = eks.id as string
+    const cats: string[] = eks.kategori || []
+    let boost = 0
+    cats.forEach(cat => {
+      boost += kategoriScores[cat] || 0
+    })
+    if (boost > 0) {
+      personalScores[eid] = (personalScores[eid] || 0) + boost
+    }
+  })
+
+  // 4. Jika tidak ada personal score sama sekali, langsung return []
+  if (Object.keys(personalScores).length === 0) return []
+
+  // 5. Hitung CF contributions
+  // 5a. Bangun profile user (rating + respons) semua user
   const profiles: Record<string, Record<string, number>> = {}
   allRatings.forEach(r => {
     const uid = r.user_id as string
@@ -70,17 +105,11 @@ async function getRekomendasiEkskul(
     profiles[uid][key] = (profiles[uid][key] || 0) + r.score
   })
 
-  const myProfile = profiles[userId] || {}
-  if (Object.keys(myProfile).length === 0) return []
+  const myProfile = profiles[userId]
 
-  // 3. Siapkan data untuk CF
-  const simThreshold = 0.1
+  // 5b. User-Based CF
   const userBasedScores: Record<string, number> = {}
-  const itemBasedScores: Record<string, number> = {}
-  const userRatings = allRatings.filter(r => r.user_id === userId)
-  const userRatedEkskuls = new Set(userRatings.map(r => r.ekskul_id as string))
-
-  // 4. User-Based CF
+  const simThreshold = 0.1
   for (const [otherId, prof] of Object.entries(profiles)) {
     if (otherId === userId) continue
     const sim = cosineSimilarity(myProfile, prof)
@@ -93,7 +122,7 @@ async function getRekomendasiEkskul(
       })
   }
 
-  // 5. Item-Based CF
+  // 5c. Item-Based CF
   const itemUserMap: Record<string, Record<string, number>> = {}
   allRatings.forEach(r => {
     const eid = r.ekskul_id as string
@@ -101,6 +130,7 @@ async function getRekomendasiEkskul(
     itemUserMap[eid] = itemUserMap[eid] || {}
     itemUserMap[eid][uid] = r.rating
   })
+  const itemBasedScores: Record<string, number> = {}
   userRatings.forEach(r => {
     const baseEid = r.ekskul_id as string
     const myRating = r.rating
@@ -112,45 +142,18 @@ async function getRekomendasiEkskul(
     })
   })
 
-  // 6. Hitung final skor dengan boost:
-  //    - userCF (10%), itemCF (10%)
-  //    - selfRatingBoost (60%) untuk rating pribadi
-  //    - responseBoost (20%) untuk respons kuis pribadi
-  const finalScores: Record<string, number> = {}
-  ekskuls.forEach(eks => {
-    const eid = eks.id as string
-    const uScore = userBasedScores[eid] || 0
-    const iScore = itemBasedScores[eid] || 0
-
-    // Boost dari rating pribadi
-    const myRateObj = userRatings.find(r => r.ekskul_id === eid)
-    const selfBoost = myRateObj ? (myRateObj.rating as number) : 0
-
-    // Boost dari respons kategori
-    let respBoost = 0
-    const cats: string[] = eks.kategori || []
-    cats.forEach(cat => {
-      const key = `q_${cat}`
-      respBoost += (myProfile[key] || 0)
-    })
-
-    const total =
-      uScore * 0.1 +
-      iScore * 0.1 +
-      selfBoost * 0.6 +
-      respBoost * 0.2
-
-    if (total > 0) {
-      finalScores[eid] = total
-    }
+  // 6. Tambahkan CF ke personalScores
+  Object.keys(personalScores).forEach(eid => {
+    const ub = userBasedScores[eid] || 0
+    const ib = itemBasedScores[eid] || 0
+    // Bobot CF total 50% (25% user, 25% item)
+    personalScores[eid] += ub * 0.25 + ib * 0.25
   })
 
-  // 7. Urutkan & ambil top 10
-  const sorted = Object.entries(finalScores)
+  // 7. Ranking
+  const sorted = Object.entries(personalScores)
     .sort(([, a], [, b]) => b - a)
-    .slice(0, 10)
 
-  // 8. Kembalikan data ekskul + skor
   return sorted
     .map(([eid, skor]) => {
       const eks = ekskuls.find(e => e.id === eid)
@@ -161,28 +164,25 @@ async function getRekomendasiEkskul(
 
 export async function GET() {
   try {
-    const [usersResult, ratingsResult, responsesResult, cachedData] = await Promise.all([
+    const [uRes, rRes, respRes, cacheData] = await Promise.all([
       supabase.from("users").select("id, nama_lengkap, username, foto_url").eq("is_admin", false),
       supabase.from("ratings").select("*"),
       supabase.from("responses").select("*"),
       getCachedData(),
     ])
+    if (uRes.error) return NextResponse.json({ error: "Failed to fetch users" }, { status: 500 })
 
-    if (usersResult.error) {
-      return NextResponse.json({ error: "Failed to fetch users" }, { status: 500 })
-    }
-
-    const users = usersResult.data || []
-    const allRatings = ratingsResult.data || []
-    const allResponses = responsesResult.data || []
-    const { questions, ekskuls } = cachedData
+    const users = uRes.data || []
+    const allRatings = rRes.data || []
+    const allResponses = respRes.data || []
+    const { questions, ekskuls } = cacheData
 
     const batchSize = 5
     const recommendations: any[] = []
 
     for (let i = 0; i < users.length; i += batchSize) {
       const batch = users.slice(i, i + batchSize)
-      const batchResults = await Promise.all(batch.map(async (user) => {
+      const results = await Promise.all(batch.map(async user => {
         const recs = await getRekomendasiEkskul(user.id, allRatings, allResponses, questions, ekskuls)
         const top3 = recs.slice(0, 3).map((rec: any, idx: number) => ({
           rank: idx + 1,
@@ -200,12 +200,12 @@ export async function GET() {
           recommendations: top3,
         }
       }))
-      recommendations.push(...batchResults)
+      recommendations.push(...results)
     }
 
     return NextResponse.json(recommendations)
-  } catch (error) {
-    console.error("Error generating recommendations:", error)
+  } catch (err) {
+    console.error(err)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }
