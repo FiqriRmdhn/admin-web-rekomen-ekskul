@@ -2,26 +2,33 @@ import { NextResponse } from "next/server"
 import { supabase } from "@/lib/supabase"
 
 /**
- * Hitung cosine similarity antara dua vektor.
+ * Hitung Pearson correlation antara dua vektor.
  */
-function cosineSimilarity(a: Record<string, number>, b: Record<string, number>): number {
-  const commonKeys = Object.keys(a).filter(k => k in b)
-  if (commonKeys.length === 0) return 0
-  let dot = 0, normA = 0, normB = 0
-  for (const k of commonKeys) {
-    dot += a[k] * b[k]
+function pearsonSimilarity(a: Record<string, number>, b: Record<string, number>): number {
+  const keys = Object.keys(a).filter(k => k in b)
+  const n = keys.length
+  if (n === 0) return 0
+
+  // Rata‑rata
+  const meanA = keys.reduce((sum, k) => sum + a[k], 0) / n
+  const meanB = keys.reduce((sum, k) => sum + b[k], 0) / n
+
+  // Numerator & denominator
+  let num = 0, denA = 0, denB = 0
+  for (const k of keys) {
+    const da = a[k] - meanA
+    const db = b[k] - meanB
+    num += da * db
+    denA += da * da
+    denB += db * db
   }
-  for (const v of Object.values(a)) {
-    normA += v * v
-  }
-  for (const v of Object.values(b)) {
-    normB += v * v
-  }
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB))
+  const denom = Math.sqrt(denA * denB)
+  return denom === 0 ? 0 : num / denom
 }
 
 /**
- * Hitung personalScores murni dengan hybrid CF (user-based + item-based).
+ * Hitung personalScores murni dengan hybrid CF (user-based + item-based),
+ * menggunakan Pearson correlation.
  */
 async function calcPersonalScores(
   userId: string,
@@ -44,20 +51,18 @@ async function calcPersonalScores(
   const simThreshold = 0.1
   const userBasedScores: Record<string, number> = {}
 
-  // 2. User-Based CF
+  // 2. User-Based CF (Pearson)
   for (const [otherId, prof] of Object.entries(profiles)) {
     if (otherId === userId) continue
-    const sim = cosineSimilarity(myProfile, prof)
+    const sim = pearsonSimilarity(myProfile, prof)
     if (sim <= simThreshold) continue
-    // kontribusi rating user lain untuk item yang belum dirate user
     for (const [eid, r] of Object.entries(prof)) {
       if (eid in myProfile) continue
       userBasedScores[eid] = (userBasedScores[eid] || 0) + sim * r
     }
   }
 
-  // 3. Item-Based CF
-  // build map: ekskul_id → { user_id: rating }
+  // 3. Item-Based CF (Pearson)
   const itemUserMap: Record<string, Record<string, number>> = {}
   allRatings.forEach(r => {
     itemUserMap[r.ekskul_id] = itemUserMap[r.ekskul_id] || {}
@@ -69,7 +74,7 @@ async function calcPersonalScores(
     const neighbors = itemUserMap[baseEid] || {}
     for (const [otherEid, uMap] of Object.entries(itemUserMap)) {
       if (otherEid === baseEid) continue
-      const sim = cosineSimilarity(neighbors, uMap)
+      const sim = pearsonSimilarity(neighbors, uMap)
       if (sim <= simThreshold) continue
       itemBasedScores[otherEid] = (itemBasedScores[otherEid] || 0) + sim * myR
     }
@@ -95,7 +100,7 @@ async function calcPersonalScores(
 
 /**
  * Endpoint GET: untuk setiap user non-admin, hitung rekomendasi
- * – menggunakan personalScores via CF hybrid.
+ * – menggunakan personalScores via CF hybrid dengan Pearson.
  */
 export async function GET() {
   try {
