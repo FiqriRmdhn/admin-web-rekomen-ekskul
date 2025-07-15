@@ -191,13 +191,13 @@ async function getRekomendasiEkskul(
     const i = itemBased[eid] || 0
 
     // Bobot kontribusi: userBased (0.1), itemBased (1.9)
-    const baseScore = u * 0.1 + i * 1.9
+    const baseScore = u * 0.01 + i * 0.19
 
     // Boost berdasarkan kategori minat
     const kategoriEkskul = eks.kategori || []
     let kategoriBoost = 0
     kategoriEkskul.forEach((k: string) => {
-      kategoriBoost += (kategoriMinat[k] || 0) * 0.1
+      kategoriBoost += (kategoriMinat[k] || 0) * 0.01
     })
 
     // Boost jika user sendiri pernah memberi rating pada ekskul tsb
@@ -205,7 +205,7 @@ async function getRekomendasiEkskul(
     let selfBoost = 0
     if (myRating) {
       const ratingValue = myRating.rating as number
-      selfBoost += ratingValue * 5.0
+      selfBoost += ratingValue * 0.3
     }
 
     // Skor akhir ekskul
