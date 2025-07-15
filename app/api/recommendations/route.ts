@@ -120,8 +120,8 @@ async function getRekomendasiEkskul(
 
   // 6. Hitung final skor dengan boost:
   //    - userCF (10%), itemCF (10%)
-  //    - selfRatingBoost (70%) untuk rating pribadi
-  //    - responseBoost (10%) untuk respons kuis pribadi
+  //    - selfRatingBoost (60%) untuk rating pribadi
+  //    - responseBoost (20%) untuk respons kuis pribadi
   const finalScores: Record<string, number> = {}
   ekskuls.forEach(eks => {
     const eid = eks.id as string
@@ -143,8 +143,8 @@ async function getRekomendasiEkskul(
     const total =
       uScore * 0.1 +
       iScore * 0.1 +
-      selfBoost * 0.7 +
-      respBoost * 0.1
+      selfBoost * 0.6 +
+      respBoost * 0.2
 
     if (total > 0) {
       finalScores[eid] = total
