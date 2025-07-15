@@ -29,21 +29,21 @@ function RecommendationSkeleton() {
     <Card className="relative">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <Skeleton className="h-12 w-12 rounded-full" />
-            <div>
+          <div className="flex items-center space-x-3 min-w-0 flex-1">
+            <Skeleton className="h-12 w-12 rounded-full flex-shrink-0" />
+            <div className="min-w-0 flex-1">
               <Skeleton className="h-5 w-32 mb-1" />
               <Skeleton className="h-4 w-20" />
             </div>
           </div>
-          <Skeleton className="h-6 w-12" />
+          <Skeleton className="h-6 w-12 flex-shrink-0 ml-2" />
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
         {[1, 2, 3].map((i) => (
           <div key={i} className="flex items-center space-x-3 p-3 rounded-lg border bg-gray-50/50">
-            <Skeleton className="h-6 w-6 rounded-full" />
-            <div className="flex-1 space-y-2">
+            <Skeleton className="h-6 w-6 rounded-full flex-shrink-0" />
+            <div className="flex-1 min-w-0 space-y-2">
               <Skeleton className="h-4 w-24" />
               <div className="flex space-x-2">
                 <Skeleton className="h-3 w-16" />
@@ -184,8 +184,8 @@ export default function RecommendationsPage() {
             <Card key={userRec.user_id} className="relative">
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <Avatar className="h-12 w-12">
+                  <div className="flex items-center space-x-3 min-w-0 flex-1">
+                    <Avatar className="h-12 w-12 flex-shrink-0">
                       <AvatarImage src={userRec.foto_url || undefined} />
                       <AvatarFallback className="bg-blue-500 text-white font-semibold">
                         {userRec.nama_lengkap
@@ -199,7 +199,7 @@ export default function RecommendationsPage() {
                       <CardDescription className="truncate">@{userRec.username}</CardDescription>
                     </div>
                   </div>
-                  <Badge variant="outline" className="text-xs">
+                  <Badge variant="outline" className="text-xs flex-shrink-0 ml-2">
                     Top 3
                   </Badge>
                 </div>
