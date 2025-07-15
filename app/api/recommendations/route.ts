@@ -1,157 +1,168 @@
 import { NextResponse } from "next/server"
 import { supabase } from "@/lib/supabase"
 
-/**
- * Hitung Pearson correlation antara dua vektor.
- */
-function pearsonSimilarity(a: Record<string, number>, b: Record<string, number>): number {
-  const keys = Object.keys(a).filter(k => k in b)
-  const n = keys.length
-  if (n === 0) return 0
+// Cache untuk data yang jarang berubah (hanya ekstrakurikuler)
+let ekskulsCache: any[] | null = null
+let cacheTimestamp = 0
+const CACHE_DURATION = 5 * 60 * 1000 // 5 menit
 
-  // Rata‑rata
-  const meanA = keys.reduce((sum, k) => sum + a[k], 0) / n
-  const meanB = keys.reduce((sum, k) => sum + b[k], 0) / n
+// Cosine similarity untuk dua vektor rating
+function cosineSimilarity(a: Record<string, number>, b: Record<string, number>): number {
+  const keys = Object.keys(a).filter((k) => k in b)
+  if (keys.length === 0) return 0
 
-  // Numerator & denominator
-  let num = 0, denA = 0, denB = 0
-  for (const k of keys) {
-    const da = a[k] - meanA
-    const db = b[k] - meanB
-    num += da * db
-    denA += da * da
-    denB += db * db
-  }
-  const denom = Math.sqrt(denA * denB)
-  return denom === 0 ? 0 : num / denom
+  let dot = 0, normA = 0, normB = 0
+  keys.forEach((k) => {
+    dot += a[k] * b[k]
+    normA += a[k] * a[k]
+    normB += b[k] * b[k]
+  })
+
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB))
 }
 
-/**
- * Hitung personalScores murni dengan hybrid CF (user-based + item-based),
- * menggunakan Pearson correlation.
- */
-async function calcPersonalScores(
+// Ambil daftar ekstrakurikuler dengan cache
+async function getCachedEkskuls() {
+  const now = Date.now()
+  if (ekskulsCache && now - cacheTimestamp < CACHE_DURATION) {
+    return ekskulsCache
+  }
+  const { data, error } = await supabase
+    .from("ekstrakurikuler")
+    .select("*")
+  ekskulsCache = data || []
+  cacheTimestamp = now
+  return ekskulsCache
+}
+
+// Collaborative Filtering: user- & item-based
+async function getRekomendasiEkskul(
   userId: string,
-  allRatings: { user_id: string; ekskul_id: string; rating: number }[],
+  allRatings: any[],
+  ekskuls: any[]
 ) {
-  // 1. Build profile per user: user → { ekskul_id: total_rating }
+  // 1) Rating milik user target
+  const userRatings = allRatings.filter(r => r.user_id === userId)
+  if (userRatings.length === 0) return []
+
+  // 2) Bangun profil: { userId: { ekskulId: rating, ... }, ... }
   const profiles: Record<string, Record<string, number>> = {}
   allRatings.forEach(r => {
-    const uid = r.user_id
-    profiles[uid] = profiles[uid] || {}
-    profiles[uid][r.ekskul_id] = (profiles[uid][r.ekskul_id] || 0) + r.rating
+    const uid = r.user_id as string
+    const eid = r.ekskul_id as string
+    const rt  = r.rating as number
+    if (!profiles[uid]) profiles[uid] = {}
+    profiles[uid][eid] = rt
   })
 
-  const myProfile = profiles[userId] || {}
-  if (Object.keys(myProfile).length === 0) {
-    // User belum punya rating
-    return []
-  }
+  const myProfile = profiles[userId]
+  const ratedSet  = new Set(Object.keys(myProfile))
 
-  const simThreshold = 0.1
-  const userBasedScores: Record<string, number> = {}
-
-  // 2. User-Based CF (Pearson)
+  // 3) User-based CF
+  const userBased: Record<string, number> = {}
   for (const [otherId, prof] of Object.entries(profiles)) {
     if (otherId === userId) continue
-    const sim = pearsonSimilarity(myProfile, prof)
-    if (sim <= simThreshold) continue
-    for (const [eid, r] of Object.entries(prof)) {
-      if (eid in myProfile) continue
-      userBasedScores[eid] = (userBasedScores[eid] || 0) + sim * r
+    const sim = cosineSimilarity(myProfile, prof)
+    if (sim <= 0.1) continue
+    for (const [eid, rating] of Object.entries(prof)) {
+      if (ratedSet.has(eid)) continue
+      userBased[eid] = (userBased[eid] || 0) + rating * sim
     }
   }
 
-  // 3. Item-Based CF (Pearson)
-  const itemUserMap: Record<string, Record<string, number>> = {}
+  // 4) Item-based CF
+  const itemUser: Record<string, Record<string, number>> = {}
   allRatings.forEach(r => {
-    itemUserMap[r.ekskul_id] = itemUserMap[r.ekskul_id] || {}
-    itemUserMap[r.ekskul_id][r.user_id] = r.rating
+    const eid = r.ekskul_id as string
+    const uid = r.user_id  as string
+    const rt  = r.rating   as number
+    if (!itemUser[eid]) itemUser[eid] = {}
+    itemUser[eid][uid] = rt
   })
 
-  const itemBasedScores: Record<string, number> = {}
-  for (const [baseEid, myR] of Object.entries(myProfile)) {
-    const neighbors = itemUserMap[baseEid] || {}
-    for (const [otherEid, uMap] of Object.entries(itemUserMap)) {
-      if (otherEid === baseEid) continue
-      const sim = pearsonSimilarity(neighbors, uMap)
-      if (sim <= simThreshold) continue
-      itemBasedScores[otherEid] = (itemBasedScores[otherEid] || 0) + sim * myR
+  const itemBased: Record<string, number> = {}
+  for (const [eid, rt] of Object.entries(myProfile)) {
+    for (const [otherEid, uMap] of Object.entries(itemUser)) {
+      if (otherEid === eid || ratedSet.has(otherEid)) continue
+      const sim = cosineSimilarity(itemUser[eid], uMap)
+      if (sim <= 0.1) continue
+      itemBased[otherEid] = (itemBased[otherEid] || 0) + sim * rt
     }
   }
 
-  // 4. Agregasi ke personalScores dengan bobot 50:50
-  const personalScores: Record<string, number> = {}
-  const allEids = new Set([
-    ...Object.keys(userBasedScores),
-    ...Object.keys(itemBasedScores)
-  ])
-  allEids.forEach(eid => {
-    const ub = userBasedScores[eid] || 0
-    const ib = itemBasedScores[eid] || 0
-    personalScores[eid] = ub * 0.5 + ib * 0.5
+  // 5) Gabungkan skor dan urutkan
+  const finalScores: Record<string, number> = {}
+  ekskuls.forEach(eks => {
+    const eid = eks.id as string
+    const u   = userBased[eid]  || 0
+    const i   = itemBased[eid]  || 0
+    const total = u * 0.5 + i * 0.5
+    if (total > 0) finalScores[eid] = total
   })
 
-  // 5. Sort dari tertinggi
-  return Object.entries(personalScores)
+  const sorted = Object.entries(finalScores)
     .sort(([, a], [, b]) => b - a)
-    .map(([ekskul_id, score]) => ({ ekskul_id, score }))
+    .slice(0, 10)
+
+  // 6) Return dengan struktur yang sama
+  return sorted
+    .map(([eid, skor]) => {
+      const eks = ekskuls.find(x => x.id === eid)
+      if (!eks) return null
+      return { ...eks, skor }
+    })
+    .filter(Boolean)
 }
 
-/**
- * Endpoint GET: untuk setiap user non-admin, hitung rekomendasi
- * – menggunakan personalScores via CF hybrid dengan Pearson.
- */
+// API handler
 export async function GET() {
   try {
-    // 1. Fetch data
-    const [usersRes, ratingsRes, ekskulsRes] = await Promise.all([
+    // 1) Fetch users & ratings & ekstrakurikuler
+    const [uRes, rRes, ekskuls] = await Promise.all([
       supabase
         .from("users")
         .select("id, nama_lengkap, username, foto_url")
         .eq("is_admin", false),
-      supabase.from("ratings").select("user_id, ekskul_id, rating"),
-      supabase.from("ekstrakurikuler").select("id, nama, kategori"),
+      supabase.from("ratings").select("*"),
+      getCachedEkskuls(),
     ])
 
-    if (usersRes.error || ratingsRes.error || ekskulsRes.error) {
-      console.error(usersRes.error || ratingsRes.error || ekskulsRes.error)
-      return NextResponse.json({ error: "Failed to fetch data" }, { status: 500 })
+    if (uRes.error || rRes.error) {
+      return NextResponse.json({ error: "Fetch error" }, { status: 500 })
     }
 
-    const users = usersRes.data!
-    const allRatings = ratingsRes.data!
-    const ekskuls = ekskulsRes.data!
+    const users = uRes.data || []
+    const allRatings = rRes.data || []
+    const recommendations: any[] = []
 
-    // 2. Untuk setiap user, hitung personalScores
-    const recommendations = await Promise.all(
-      users.map(async (user) => {
-        const scores = await calcPersonalScores(user.id, allRatings)
-        // Gabungkan dengan detail ekskul
-        const recs = scores.map((r, idx) => {
-          const eks = ekskuls.find(e => e.id === r.ekskul_id)
-          return {
-            rank: idx + 1,
-            ekskul_id: r.ekskul_id,
-            nama: eks?.nama,
-            kategori: eks?.kategori,
-            score: r.score
-          }
-        })
+    // 2) Proses per batch
+    const batchSize = 5
+    for (let i = 0; i < users.length; i += batchSize) {
+      const batch = users.slice(i, i + batchSize)
+      const batchRecs = await Promise.all(batch.map(async user => {
+        const recs = await getRekomendasiEkskul(user.id, allRatings, ekskuls)
+        const top3 = recs.slice(0, 3).map((rec: any, idx: number) => ({
+          rank: idx + 1,
+          ekskul_nama: rec.nama,
+          confidence_score: Math.min(rec.skor / 10, 1),
+          raw_score: rec.skor,
+          matching_categories: [],      // dikosongkan
+          is_best: idx === 0,
+        }))
         return {
           user_id: user.id,
           nama_lengkap: user.nama_lengkap,
           username: user.username,
           foto_url: user.foto_url,
-          recommendations: recs
+          recommendations: top3,
         }
-      })
-    )
+      }))
+      recommendations.push(...batchRecs)
+    }
 
-    // 3. Kembalikan JSON
     return NextResponse.json(recommendations)
-  } catch (error) {
-    console.error("Error generating recommendations:", error)
+  } catch (err) {
+    console.error("Recommendation error:", err)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }
