@@ -12,49 +12,37 @@ function cosineSimilarity(a: Record<string, number>, b: Record<string, number>):
   const aKeys = Object.keys(a)
   const bKeys = Object.keys(b)
   const commonKeys = aKeys.filter((key) => key in b)
-
   if (commonKeys.length === 0) return 0
-
-  let dot = 0
-  let normA = 0
-  let normB = 0
-
+  let dot = 0, normA = 0, normB = 0
   for (const key of commonKeys) {
     dot += a[key] * b[key]
   }
-
   for (const key of aKeys) {
     normA += a[key] * a[key]
   }
-
   for (const key of bKeys) {
     normB += b[key] * b[key]
   }
-
   return dot / (Math.sqrt(normA) * Math.sqrt(normB))
 }
 
 // Fungsi untuk mendapatkan data dengan cache
 async function getCachedData() {
   const now = Date.now()
-
   if (questionsCache && ekskulsCache && now - cacheTimestamp < CACHE_DURATION) {
     return { questions: questionsCache, ekskuls: ekskulsCache }
   }
-
   const [questionsResult, ekskulsResult] = await Promise.all([
     supabase.from("questions").select("id, category"),
     supabase.from("ekstrakurikuler").select("*"),
   ])
-
   questionsCache = questionsResult.data || []
   ekskulsCache = ekskulsResult.data || []
   cacheTimestamp = now
-
   return { questions: questionsCache, ekskuls: ekskulsCache }
 }
 
-// Hybrid User-Based + Item-Based CF
+// Hybrid CF dengan boost untuk jawaban user sendiri
 async function getRekomendasiEkskul(
   userId: string,
   allRatings: any[],
@@ -62,11 +50,11 @@ async function getRekomendasiEkskul(
   questions: any[],
   ekskuls: any[],
 ) {
-  // 1. Build kategori mapping
+  // 1. Mapping question → kategori
   const qCat: Record<number, string> = {}
   questions.forEach(q => { qCat[q.id] = q.category })
 
-  // 2. Build profile per user (rating + response)
+  // 2. Bangun profil per user (rating & respons)
   const profiles: Record<string, Record<string, number>> = {}
   allRatings.forEach(r => {
     const uid = r.user_id as string
@@ -82,23 +70,21 @@ async function getRekomendasiEkskul(
     profiles[uid][key] = (profiles[uid][key] || 0) + r.score
   })
 
-  // Jika profil user kosong, return []
   const myProfile = profiles[userId] || {}
   if (Object.keys(myProfile).length === 0) return []
 
-  // Siapkan data
+  // 3. Siapkan data untuk CF
   const simThreshold = 0.1
   const userBasedScores: Record<string, number> = {}
   const itemBasedScores: Record<string, number> = {}
   const userRatings = allRatings.filter(r => r.user_id === userId)
   const userRatedEkskuls = new Set(userRatings.map(r => r.ekskul_id as string))
 
-  // 3. User-Based CF
+  // 4. User-Based CF
   for (const [otherId, prof] of Object.entries(profiles)) {
     if (otherId === userId) continue
     const sim = cosineSimilarity(myProfile, prof)
     if (sim <= simThreshold) continue
-
     allRatings
       .filter(r => r.user_id === otherId && !userRatedEkskuls.has(r.ekskul_id as string))
       .forEach(r => {
@@ -107,7 +93,7 @@ async function getRekomendasiEkskul(
       })
   }
 
-  // 4. Item-Based CF
+  // 5. Item-Based CF
   const itemUserMap: Record<string, Record<string, number>> = {}
   allRatings.forEach(r => {
     const eid = r.ekskul_id as string
@@ -115,7 +101,6 @@ async function getRekomendasiEkskul(
     itemUserMap[eid] = itemUserMap[eid] || {}
     itemUserMap[eid][uid] = r.rating
   })
-
   userRatings.forEach(r => {
     const baseEid = r.ekskul_id as string
     const myRating = r.rating
@@ -127,20 +112,45 @@ async function getRekomendasiEkskul(
     })
   })
 
-  // 5. Gabungkan skor dan ranking
+  // 6. Hitung final skor dengan boost:
+  //    - userCF (30%), itemCF (30%)
+  //    - selfRatingBoost (20%) untuk rating pribadi
+  //    - responseBoost (20%) untuk respons kuis pribadi
   const finalScores: Record<string, number> = {}
   ekskuls.forEach(eks => {
     const eid = eks.id as string
     const uScore = userBasedScores[eid] || 0
     const iScore = itemBasedScores[eid] || 0
-    const total = uScore * 0.5 + iScore * 0.5
-    if (total > 0) finalScores[eid] = total
+
+    // Boost dari rating pribadi
+    const myRateObj = userRatings.find(r => r.ekskul_id === eid)
+    const selfBoost = myRateObj ? (myRateObj.rating as number) : 0
+
+    // Boost dari respons kategori
+    let respBoost = 0
+    const cats: string[] = eks.kategori || []
+    cats.forEach(cat => {
+      const key = `q_${cat}`
+      respBoost += (myProfile[key] || 0)
+    })
+
+    const total =
+      uScore * 0.3 +
+      iScore * 0.3 +
+      selfBoost * 0.2 +
+      respBoost * 0.2
+
+    if (total > 0) {
+      finalScores[eid] = total
+    }
   })
 
+  // 7. Urutkan & ambil top 10
   const sorted = Object.entries(finalScores)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10)
 
+  // 8. Kembalikan data ekskul + skor
   return sorted
     .map(([eid, skor]) => {
       const eks = ekskuls.find(e => e.id === eid)
